@@ -40,3 +40,22 @@ The extraction window for a single run is always one full calendar day (24 hrs).
 |---|---|
 | **Extraction Tool** | Two dedicated extraction routines, one for sales-related data and one for expense-related data, orchestrated by Prefect, a workflow scheduling tool. Each stage of the run is logged. |
 | **Extraction Schedule** | Daily at 12:00 AM, after the bake shop's business day has ended, via a Prefect scheduled deployment. |
+
+### 1.4 Extraction Scope
+ 
+| In Scope | Out of Scope |
+|---|---|
+| `order_items` joined with `orders` (for sales) | Products, occasions/events, promo bundles |
+| `waste_logs` (for expenses) | Customer personal information beyond what's needed for joins |
+| `inventory_logs` (for expenses) | Admin/auth data, notifications, pending/unpaid orders |
+| Orders where `status != 'Cancelled'` | Cancelled orders |
+| Log entries where `voided_at IS NULL` | Voided waste/inventory entries |
+| One calendar day per run (previous day by default, or an explicit `target_date`) | Dates earlier than the first day with any activity in the source database |
+ 
+### 1.5 Source Limitations and Assumptions
+ 
+- **Schema coupling risk:** The extraction queries reference exact column names (`total_price`, `cost`, `logged_at`, etc.) from the operational schema. Since the ETL pipeline is a separate codebase from the Node.js backend, a schema change made by the development team will silently break extraction unless communicated in advance.
+- **Connection limits (mitigated):** Supabase projects have a limited connection pool.
+- **No historical data before system launch:** Extraction cannot produce records for dates before the CakeLytics system went live, since no data exists in the source for that period.
+- **`updated_at` vs. `created_at` assumption for orders:** The pipeline assumes `orders.updated_at` reflects when an order was finalized, not merely when it was last touched for an unrelated reason. If the application updates this field for other reasons, sales could be misattributed to the wrong day.
+ 
