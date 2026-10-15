@@ -42,15 +42,18 @@ The extraction window for a single run is always one full calendar day (24 hrs).
 | **Extraction Schedule** | Daily at 12:00 AM, after the bake shop's business day has ended, via a Prefect scheduled deployment. |
 
 ### 1.4 Extraction Scope
- 
-| In Scope | Out of Scope |
+
+| Table | Data Extracted |
 |---|---|
-| `order_items` joined with `orders` (for sales) | Products, occasions/events, promo bundles |
-| `waste_logs` (for expenses) | Customer personal information beyond what's needed for joins |
-| `inventory_logs` (for expenses) | Admin/auth data, notifications, pending/unpaid orders |
-| Orders where `status != 'Cancelled'` | Cancelled orders |
-| Log entries where `voided_at IS NULL` | Voided waste/inventory entries |
-| One calendar day per run (previous day by default, or an explicit `target_date`) | Dates earlier than the first day with any activity in the source database |
+| `orders` and `order_items` | Order line items (quantity and total price) of each order |
+| `waste_logs` | Cost of spoiled, unsold, or damaged items |
+| `inventory_logs` | Cost of stock movements (ingredients and celebration materials) | 
+
+**Date range**
+
+- One full calendar day per run, from 12:00:00 AM to 11:59:59 PM of the target date.
+- By default, the target date is the previous day, since the pipeline runs at 12:00 AM after the business day has ended.
+- A specific past date may also be provided to re-process a given day.
  
 ### 1.5 Source Limitations and Assumptions
  
