@@ -167,3 +167,97 @@ The Extraction stage records log messages when retrieving data from the source d
 
 ---
 
+## 6. Extraction Data Contract and Naming Convention
+
+### 6.1 Required Schema (as extracted)
+
+| Source Table | Column | Expected Type | Purpose | Required? |
+| :--- | :--- | :--- | :--- | :---: |
+| `orders` | `orders.id` | UUID | Joins an order to its order items. | Yes |
+| `orders` | `orders.updated_at` | TIMESTAMP | Determines whether an order falls within the target date range. | Yes |
+| `orders` | `orders.status` | VARCHAR | Excludes cancelled orders from the sales extraction. | Yes |
+| `order_items` | `order_items.order_id` | UUID | Links each order item to its order. | Yes |
+| `order_items` | `order_items.quantity` | INTEGER | Provides the quantity used in sales processing. | Yes |
+| `order_items` | `order_items.total_price` | NUMERIC | Provides the item total used in sales processing. | Yes |
+| `waste_logs` | `waste_logs.cost` | NUMERIC | Provides the cost used in expense processing. | Yes |
+| `waste_logs` | `waste_logs.logged_at` | TIMESTAMP | Determines whether a waste record falls within the target date range. | Yes |
+| `waste_logs` | `waste_logs.voided_at` | TIMESTAMP, nullable | Allows the query to retrieve records that have not been voided. | Yes |
+| `inventory_logs` | `inventory_logs.cost` | NUMERIC | Provides the cost used in expense processing. | Yes |
+| `inventory_logs` | `inventory_logs.created_at` | TIMESTAMP | Determines whether an inventory record falls within the target date range. | Yes |
+| `inventory_logs` | `inventory_logs.voided_at` | TIMESTAMP, nullable | Allows the query to retrieve records that have not been voided. | Yes |
+
+The query also depends on the relevant source tables being available. The columns listed above are required by the documented extraction logic; they do not mean that every column is included in the returned DataFrame. For example, `orders.id` and `order_items.order_id` are used for joining records in the sales query.
+
+### 6.2 Naming Convention
+
+The extraction process retains the source column names used in its SQL queries. It does not introduce a separate column-renaming step during extraction.
+
+* **Column naming:** Source names use the existing CakeLytics naming convention, including `snake_case` names such as `updated_at`, `logged_at`, and `total_price`.
+* **Abbreviations:** Existing source column names are retained instead of introducing new abbreviations.
+* **Identifiers:** The sales query uses `orders.id` and `order_items.order_id` to match order records with their corresponding items.
+* **Consistency:** The documentation uses the same table and column names as the source SQL queries to make the extraction logic easier to trace.
+
+### 6.3 Schema Consistency Handling
+
+If an expected column is renamed or removed in the source system, the SQL query raises a database error and the extraction run stops before any data is handed over. If the query still runs but a returned DataFrame lacks an expected column, `run_extract.py` reports FAIL and exits with code 1. In both cases no partial data is handed to the next stage, and the mismatch must be resolved with an explicit, documented mapping before the extraction is run again for that table.
+
+### 6.4 Source-to-Standardized Field Mapping
+
+Since the extraction layer intentionally keeps field names identical to the source (no renaming), the table below documents the type mappings applied as data moves from PostgreSQL into Python/Pandas:
+
+| Source Column | Standardized Column | Source Type | Target Type | Mapping Type |
+| :--- | :--- | :--- | :--- | :--- |
+| `total_price` | `total_price` | NUMERIC | `float64` | Type mapping |
+| `quantity` | `quantity` | INTEGER | `int64` | Type mapping |
+| `cost` | `cost` | NUMERIC | `float64` | Type mapping |
+| `logged_at` | `logged_at` | TIMESTAMP | `datetime64` (timezone-aware, UTC) | Type mapping |
+| `created_at` | `created_at` | TIMESTAMP | `datetime64` (timezone-aware, UTC) | Type mapping |
+| `updated_at` | `updated_at` | TIMESTAMP | `datetime64` (timezone-aware, UTC) | Type mapping |
+
+---
+
+## 7. Extraction Acceptance and Handover Rules
+
+### 7.1 Required Decisions
+
+* **Automatic Approval:**  
+  * *Condition:* Every extractor in the test script reports PASS (a table with 0 rows still passes).  
+  * *Action:* `run_extract.py` exits with code 0, and the extracted DataFrames can be handed to the Transformation stage.
+* **Manual Review:**  
+  * Designed but not implemented in Phase 1. The extraction code does not raise non-critical warnings, such as an unusually high record count or rows with a missing cost. A MANUAL REVIEW status is planned for the full pipeline.
+* **Rejection or Failure:**  
+  * *Condition:* The source connection fails, a SQL query raises an error (for example, a required table or column is missing), or an extractor result lacks an expected column.  
+  * *Action:* The run stops with an error, or `run_extract.py` reports FAIL and exits with code 1. No data is handed to Transformation. Automatic retries (2 attempts with a short delay) come from Prefect in the full pipeline and are not part of Phase 1.
+* **Handover:**  
+  * *What is passed to Transformation:* The Pandas DataFrames returned by `extract_sales()`, `extract_waste()`, and `extract_inventory_costs()` (`order_items_df`, `waste_df`, `inventory_df`), passed in memory. In Phase 1 these are only tested; the Transformation stage uses them in Phase 2. The extraction log lines for each run are written to the logs folder, so a later failure can be traced back to the extraction that produced the data.
+
+### 7.2 Decision Rules
+
+| Overall Condition | Acceptance Decision | Pipeline Action |
+| :--- | :--- | :--- |
+| All required tables PASS | **APPROVED** | Exit code 0. Proceed to Transformation |
+| One or more non-critical WARNING | **MANUAL REVIEW** | Not implemented in Phase 1. Planned for the full pipeline: hold the pipeline and notify the developer |
+| One or more critical FAIL | **REJECTED** | Exit code 1 or the run stops with an error. No data is handed over. Retry (2x) comes with Prefect in the full pipeline |
+
+### 7.3 Example Validation Summary (`run_extract.py`, target date 2026-10-12)
+
+| Validation Summary | Result |
+| :--- | :--- |
+| `order_items` validation | PASS (30 rows) |
+| `waste_logs` validation | PASS (0 rows) |
+| `inventory_logs` validation | PASS (27 rows) |
+| **Overall Extraction** | **PASS (all extractors passed)** |
+
+---
+
+## 8. Common Extraction Problems and Mitigation
+
+| # | Problem | Possible Cause | Impact | Mitigation |
+| :-: | :--- | :--- | :--- | :--- |
+| 1 | Supabase connection pool exhaustion | A new connection opened for every extraction call instead of being reused across a run | Extraction fails with a "too many clients" error | **Implemented.** One shared SQLAlchemy engine (pool of 5 connections, with `pool_pre_ping` health checks) is reused by all extraction functions in `config/source_db.py`. |
+| 2 | Schema change in the source system | The development team renames or removes a column without notifying the ETL maintainer | Extraction query fails outright, or silently returns incorrect/empty data | **Partially implemented.** A missing column makes the query fail, and `run_extract.py` checks the expected columns of each result. A separate schema check before extraction is not implemented. The data contract (Section 6) must be updated before any schema change ships. |
+| 3 | Network interruption mid-extraction | Unstable internet connection between the pipeline's host machine and the Supabase cloud database | Partial extraction — some rows read, connection drops before the full result set returns | In Phase 1, a failed query raises an error and the run stops, so the extraction is run again manually. Automatic retries (2 retries, 60-second delay) come with Prefect in the full pipeline. A separate completeness check is not implemented. |
+| 4 | Missing cost/price values from manual data entry | Staff occasionally log a waste or inventory entry without filling in a cost value | `total_expenses` is understated without anyone noticing | **Not yet implemented.** Extraction passes NULL values through unchanged. The original design flags such rows for manual review. |
+
+### Expected Output
+The extracted datasets (order items, waste logs, and inventory logs, scoped to the target day and checked by `run_extract.py`) are what the Transformation stage receives. No cleaning, standardization, or business computation (such as total sales, total expenses, or profit) occurs during Extraction itself — that is the responsibility of the Transformation stage.
