@@ -5,14 +5,6 @@ data from the operational database (Supabase), computes daily totals and
 profit, loads the result into a separate analytics warehouse, and displays
 it in a desktop dashboard.
 
-The project is pushed in three parts:
-
-| Phase | What it adds | Status |
-|-------|--------------|--------|
-| 1. Extract | Pull raw sales, waste, and inventory data from the source database | **This commit** |
-| 2. Transform | Clean the raw data and compute daily totals and profit | Next |
-| 3. Load | Write the daily summary into the warehouse, plus the Prefect flow and dashboard | After that |
-
 ## Folder Structure (Phase 1)
 
 ```
