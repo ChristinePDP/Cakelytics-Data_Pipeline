@@ -42,6 +42,7 @@ log = get_logger(__name__)
 
 EXIT_CODES = {"APPROVED": 0, "MANUAL REVIEW": 2, "REJECTED": 1}
 
+
 def run_transform_test(target_date: str | None = None) -> str:
     check_source_env()
 

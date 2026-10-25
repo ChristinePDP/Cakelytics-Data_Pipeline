@@ -1,13 +1,17 @@
 """
-PHASE 1 TEST — Extract only
+STAGE 1 TEST — Extract only
 
-Runs ONLY the extract stage for one day and checks that the raw data
-came back in the expected shape. Nothing is transformed or loaded.
+Runs ONLY the extract stage for one business day (Asia/Manila) and checks
+that the raw data came back in the expected shape. Nothing is transformed
+or loaded.
 
 For each extractor it checks:
   1. all expected columns are present
   2. the primary key column (id) has no NULL values
   3. the primary key column (id) has no duplicate values
+
+Every PASS / FAIL result is written to the log file (and shown on screen).
+The first rows of each result are shown on screen only.
 
 Run for yesterday (default):
     python -m pipeline.run_extract
@@ -19,13 +23,13 @@ Exit code is 0 if every extractor passed, 1 if any failed.
 """
 
 import sys
-from datetime import datetime, timedelta
 
 import pandas as pd
 
 from config.source_db import check_source_env
 from extract.extract_sales import extract_sales
 from extract.extract_expenses import extract_waste, extract_inventory_costs
+from utils.batch import make_batch
 from utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -34,7 +38,7 @@ log = get_logger(__name__)
 # query is edited wrongly, this is where it shows up first.
 # "id" is the primary key of order_items, waste_logs and inventory_logs.
 EXPECTED_COLUMNS = {
-    "sales (order_items)": ["id", "quantity", "total_price", "updated_at", "status"],
+    "sales (order_items)": ["id", "order_id", "quantity", "total_price", "updated_at", "status"],
     "waste_logs": [
         "id", "waste_type", "item_name", "quantity", "unit", "cost", "logged_at", "voided_at",
     ],
@@ -45,64 +49,64 @@ EXPECTED_COLUMNS = {
 
 
 def _check(name: str, df: pd.DataFrame) -> bool:
-    """Print a short report for one extractor and return True if it passed."""
-    print(f"\n--- {name} ---")
-
+    """Log the result of each check for one extractor and return True if it passed."""
     missing = [c for c in EXPECTED_COLUMNS[name] if c not in df.columns]
     if missing:
-        print(f"FAIL: missing columns {missing}")
+        log.error("[%s] FAIL: missing columns %s", name, missing)
         return False
 
-    print(f"PASS: {len(df)} row(s), all expected columns present")
+    log.info("[%s] PASS: %d row(s), all expected columns present", name, len(df))
 
     ok = True
 
     null_ids = int(df["id"].isna().sum())
     if null_ids:
-        print(f"FAIL: primary key (id) has {null_ids} NULL value(s)")
+        log.error("[%s] FAIL: primary key (id) has %d NULL value(s)", name, null_ids)
         ok = False
     else:
-        print("PASS: primary key (id) has no NULL values")
+        log.info("[%s] PASS: primary key (id) has no NULL values", name)
 
     duplicate_ids = int(df["id"].duplicated().sum())
     if duplicate_ids:
-        print(f"FAIL: primary key (id) has {duplicate_ids} duplicate value(s)")
+        log.error("[%s] FAIL: primary key (id) has %d duplicate value(s)", name, duplicate_ids)
         ok = False
     else:
-        print("PASS: primary key (id) is unique")
+        log.info("[%s] PASS: primary key (id) is unique", name)
 
     if df.empty:
-        print("NOTE: 0 rows for this day (fine if the shop had no activity)")
-        return ok
+        log.info("[%s] NOTE: 0 rows for this day (fine if the shop had no activity)", name)
+    else:
+        # sample rows are for the screen only, so they are printed and not logged
+        print(f"\n--- {name}: first rows ---")
+        print(df.head(5).to_string(index=False))
 
-    print(df.head(5).to_string(index=False))
     return ok
 
 
 def run_extract_test(target_date: str | None = None) -> bool:
     check_source_env()
 
-    if target_date:
-        day = datetime.strptime(target_date, "%Y-%m-%d")
-    else:
-        day = datetime.now() - timedelta(days=1)
+    batch = make_batch(target_date)
 
-    start_date = day.strftime("%Y-%m-%d 00:00:00")
-    end_date = day.strftime("%Y-%m-%d 23:59:59")
-
-    log.info("EXTRACT TEST START | data_start=%s | data_end=%s", start_date, end_date)
+    log.info(
+        "EXTRACT TEST START | run_id=%s | batch_id=%s | data_start=%s | data_end=%s",
+        batch.extraction_run_id, batch.batch_id,
+        batch.window_start.isoformat(), batch.window_end.isoformat(),
+    )
 
     results = {
-        "sales (order_items)": extract_sales(start_date, end_date),
-        "waste_logs": extract_waste(start_date, end_date),
-        "inventory_logs": extract_inventory_costs(start_date, end_date),
+        "sales (order_items)": extract_sales(batch.window_start, batch.window_end),
+        "waste_logs": extract_waste(batch.window_start, batch.window_end),
+        "inventory_logs": extract_inventory_costs(batch.window_start, batch.window_end),
     }
 
-    print(f"\nEXTRACT TEST for {day.strftime('%Y-%m-%d')}")
     passed = [_check(name, df) for name, df in results.items()]
 
     ok = all(passed)
-    log.info("EXTRACT TEST END | status=%s", "SUCCESS" if ok else "FAILED")
+    log.info(
+        "EXTRACT TEST END | run_id=%s | status=%s",
+        batch.extraction_run_id, "SUCCESS" if ok else "FAILED",
+    )
     print("\nRESULT:", "ALL EXTRACTORS PASSED" if ok else "SOMETHING FAILED — check the log")
     return ok
 
