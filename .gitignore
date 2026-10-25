@@ -6,5 +6,8 @@ venv/
 __pycache__/
 *.pyc
 
-# generated logs
+# generated at run time (kept out of GitHub: may contain business data)
 logs/*.log
+logs/*.json
+quarantine/*.csv
+reports/*.md
