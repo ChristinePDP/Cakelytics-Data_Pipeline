@@ -1,6 +1,7 @@
 """Connection to the CakeLytics operational (SOURCE) database."""
 
 import os
+os.environ['DISABLE_SQLALCHEMY_CEXT'] = '1'
 from sqlalchemy import create_engine
 from sqlalchemy.engine import make_url
 from dotenv import load_dotenv
