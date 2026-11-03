@@ -21,6 +21,7 @@ from utils.batch import Batch
 ROOT = os.path.dirname(os.path.dirname(__file__))
 REPORTS_DIR = os.path.join(ROOT, "reports")
 LOGS_DIR = os.path.join(ROOT, "logs")
+METADATA_DIR = os.path.join(ROOT, "metadata")
 
 
 def _cell(value) -> str:
@@ -113,8 +114,8 @@ def build_metadata(result, handover_counts: dict[str, int], error: str | None = 
 
 
 def write_metadata(metadata: dict, batch: Batch) -> str:
-    os.makedirs(LOGS_DIR, exist_ok=True)
-    path = os.path.join(LOGS_DIR, f"transform_{batch.run_id}.json")
+    os.makedirs(METADATA_DIR, exist_ok=True)
+    path = os.path.join(METADATA_DIR, f"transform_{batch.run_id}.json")
     with open(path, "w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=2)
     return path

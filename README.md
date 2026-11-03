@@ -22,7 +22,8 @@ extract/      -> pulls raw data from the SOURCE database (window filter only)
 transform/    -> rules, rule engine, profiling, validation, quarantine, reports
 pipeline/     -> run_extract.py (Stage 1 test) and run_transform.py (Stage 2 test)
 docs/         -> Lab 3 (Extraction) and Lab 4 (Transformation) documentation
-logs/         -> run logs and run metadata (generated, not committed)
+logs/         -> ETL run logs (generated, not committed)
+metadata/     -> transformation run metadata (generated, not committed)
 quarantine/   -> rejected and excluded records per batch (generated, not committed)
 reports/      -> data profiling report per batch (generated, not committed)
 ```
@@ -96,7 +97,7 @@ Files written by a run:
 |------|---------|
 | `quarantine/quarantine_<batch_id>.csv` | Every rejected or excluded record: id, rule ID, category, reason, amount |
 | `reports/profile_<batch_id>.md` | Data profiling report (issue table for the documentation) |
-| `logs/transform_<run_id>.json` | Run metadata: run IDs, counts, rules applied, validation results, errors |
+| `metadata/transform_<run_id>.json` | Run metadata: run IDs, counts, rules applied, validation results, errors |
 | `logs/etl_<date>.log` | Log lines (also shown on screen) |
 
 Reruns are idempotent: the quarantine file is overwritten by batch ID, so

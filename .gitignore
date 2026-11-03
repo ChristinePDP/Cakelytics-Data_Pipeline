@@ -9,5 +9,6 @@ __pycache__/
 # generated at run time (kept out of GitHub: may contain business data)
 logs/*.log
 logs/*.json
+metadata/*.json
 quarantine/*.csv
 reports/*.md

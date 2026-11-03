@@ -343,7 +343,7 @@ Validation checks evaluate the integrity, correctness, completeness, and busines
 
 ## 8. Transformation Metadata and Log Specification
 
-Every transformation execution produces a structured JSON metadata file (`logs/transform_<run_id>.json`) and detailed event logs in `logs/etl_<date>.log`.
+Every transformation execution produces a structured JSON metadata file (`metadata/transform_<run_id>.json`) and detailed event logs in `logs/etl_<date>.log`.
 
 ### 8.1 Metadata Fields Specification
 
@@ -399,7 +399,7 @@ Extraction and transformation records are maintained **separately**, establishin
 | Storage Category | Physical Directory | Access Permissions | Security & Git Status |
 |---|---|---|---|
 | **Operational Logs** | Project root `logs/` directory (`logs/etl_<date>.log`) | **Read/Write:** ETL Developer only; **Delete:** ETL Developer only; **End-users:** No access | Excluded from git repository via `.gitignore`. Not exposed to web endpoints. |
-| **Audit Metadata** | Project root `logs/` directory (`logs/transform_<run_id>.json`) | **Read/Write:** ETL Developer only; **Delete:** ETL Developer only; **End-users:** No access | Excluded from git repository via `.gitignore`. Stored as JSON audit evidence. |
+| **Audit Metadata** | Project root `metadata/` directory (`metadata/transform_<run_id>.json`) | **Read/Write:** ETL Developer only; **Delete:** ETL Developer only; **End-users:** No access | Excluded from git repository via `.gitignore`. Stored as JSON audit evidence. |
 | **Quarantine Files** | Project root `quarantine/` directory (`quarantine/quarantine_<batch_id>.csv`) | **Read/Write:** ETL Developer only; **Delete:** ETL Developer only; **End-users:** No access | Excluded from git repository via `.gitignore`. Contains sanitized defect records. |
 | **Profiling Reports** | Project root `reports/` directory (`reports/profile_<batch_id>.md`) | **Read/Write:** ETL Developer only; **Delete:** ETL Developer only; **End-users:** No access | Excluded from git repository via `.gitignore`. Internal documentation asset. |
 
@@ -484,7 +484,7 @@ Validation checks
 
 Quarantine : quarantine/quarantine_BATCH_20261019.csv  (5 record(s))
 Profile    : reports/profile_BATCH_20261019.md
-Metadata   : logs/transform_TRN_20261023_100546.json
+Metadata   : metadata/transform_TRN_20261023_100546.json
 
 DECISION: APPROVED
 ```
@@ -528,7 +528,7 @@ Validation checks
 
 Quarantine : quarantine/quarantine_BATCH_20261020_DEFECT_TEST.csv  (11 record(s))
 Profile    : reports/profile_BATCH_20261020_DEFECT_TEST.md
-Metadata   : logs/transform_TRN_20261020_DEFECT_TEST.json
+Metadata   : metadata/transform_TRN_20261020_DEFECT_TEST.json
 
 DECISION: MANUAL REVIEW
 ```
@@ -568,7 +568,7 @@ DECISION: MANUAL REVIEW
 
 ## Expected Output
 
-The transformation delivers in-memory DataFrames for `dim_date` and `fact_daily_summary` for one business day, validated by checks V-01 to V-11, accompanied by the quarantine file (`quarantine/quarantine_<batch_id>.csv`), profiling report (`reports/profile_<batch_id>.md`), and run metadata (`logs/transform_<run_id>.json`). Direct database insertion into the analytics warehouse is executed in the subsequent **Stage 3: Load**.
+The transformation delivers in-memory DataFrames for `dim_date` and `fact_daily_summary` for one business day, validated by checks V-01 to V-11, accompanied by the quarantine file (`quarantine/quarantine_<batch_id>.csv`), profiling report (`reports/profile_<batch_id>.md`), and run metadata (`metadata/transform_<run_id>.json`). Direct database insertion into the analytics warehouse is executed in the subsequent **Stage 3: Load**.
 
 ## Implementation Reference
 
