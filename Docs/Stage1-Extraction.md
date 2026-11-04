@@ -163,10 +163,10 @@ The Extraction stage records log messages when retrieving data from the source d
 | Aspect | Policy | Current Implementation |
 |---|---|---|
 | Storage Location | Store operational log files in the project's logs directory. | Implemented. Logs are written to logs/etl_YYYY-MM-DD.log, one file per day, and *.log files are excluded from the repository through .gitignore. |
-| Retention Period | Retain operational logs for 90 days. Retain any separately maintained audit records for one year, if such records are introduced. | No automatic retention period is configured. |
-| Access Permissions | Limit access to log files to authorized project developers and personnel responsible for maintaining the pipeline. | Separate role-based access permissions are not configured by the logging code. |
-| Archiving | Archive operational logs older than 90 days when they are still needed for troubleshooting or auditing. | Automatic archiving is not implemented. |
-| Deletion Rules | Delete operational logs only after the proposed retention period and after confirming that they are no longer needed for troubleshooting, auditing, or recovery. | Automatic log deletion is not implemented. |
+| Retention Period | Retain operational logs for 90 days. Retain any separately maintained audit records for one year, if such records are introduced. | Implemented. Automatic pruning is configured via `cleanup_old_logs(retention_days=90)` in `utils/logger.py`. |
+| Access Permissions | Limit access to log files to authorized project developers and personnel responsible for maintaining the pipeline. | Implemented via filesystem permissions; operational logs and sensitive data are excluded from version control via `.gitignore`, preserving only the `.gitkeep` directory placeholder. |
+| Archiving | Archive operational logs older than 90 days when they are still needed for troubleshooting or auditing. | Automatic archiving is not implemented; expired logs are pruned automatically unless manually archived. |
+| Deletion Rules | Delete operational logs only after the proposed retention period and after confirming that they are no longer needed for troubleshooting, auditing, or recovery. | Implemented. Operational logs older than 90 days are automatically deleted on logger startup while preserving `.gitkeep`. |
 
 #### Retention and Access Considerations
 

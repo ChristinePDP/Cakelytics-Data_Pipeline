@@ -37,6 +37,7 @@ from transform.reporting import (
 from transform.transform_batch import transform_batch
 from utils.batch import PH_TZ, make_batch
 from utils.logger import get_logger
+from utils.stage_output import dataframe_records, ensure_stage_directories, write_stage_output
 
 log = get_logger(__name__)
 
@@ -47,8 +48,10 @@ def run_transform_test(target_date: str | None = None) -> str:
     check_source_env()
 
     batch = make_batch(target_date)
+    ensure_stage_directories(batch)
     started = datetime.now(PH_TZ)
     handover_counts: dict[str, int] = {}
+    extract_output_path: str | None = None
 
     log.info(
         "TRANSFORM TEST START | run_id=%s | parent_run_id=%s | batch_id=%s | batch_window=%s to %s",
@@ -64,6 +67,18 @@ def run_transform_test(target_date: str | None = None) -> str:
             "inventory_logs": extract_inventory_costs(batch.window_start, batch.window_end),
         }
         handover_counts = {t: len(df) for t, df in extracted.items()}
+        extract_output_path = write_stage_output(batch, "extract", batch.extraction_run_id, {
+            "stage": "extract",
+            "run_id": batch.extraction_run_id,
+            "batch_id": batch.batch_id,
+            "batch_date": batch.batch_date,
+            "window": [batch.window_start.isoformat(), batch.window_end.isoformat()],
+            "status": "SUCCESS",
+            "tables": {
+                name: {"records_read": len(df), "records": dataframe_records(df)}
+                for name, df in extracted.items()
+            },
+        })
         log.info(
             "EXTRACTION HANDOVER | extraction_run_id=%s | batch_id=%s | rows=%s",
             batch.extraction_run_id, batch.batch_id, handover_counts,
@@ -77,12 +92,53 @@ def run_transform_test(target_date: str | None = None) -> str:
             profile_to_markdown(batch, result.profile, result.distributions, handover_counts), batch
         )
         metadata_path = write_metadata(build_metadata(result, handover_counts), batch)
+        output_path = write_stage_output(batch, "transform", batch.run_id, {
+            "stage": "transform",
+            "run_id": batch.run_id,
+            "parent_run_id": batch.extraction_run_id,
+            "batch_id": batch.batch_id,
+            "status": "SUCCESS" if result.decision == "APPROVED" else result.decision.replace(" ", "_"),
+            "decision": result.decision,
+            "handover_counts": handover_counts,
+            "failed_records": int(result.quarantine["category"].eq("REJECTED").sum()),
+            "quarantine": dataframe_records(result.quarantine),
+            "input_extract_output": extract_output_path,
+            "transformed_records": {
+                name: dataframe_records(table.output_df)
+                for name, table in result.tables.items()
+            },
+            "outputs": {
+                name: dataframe_records(df) for name, df in result.outputs.items()
+            },
+        })
 
     except Exception as exc:
         ended = datetime.now(PH_TZ)
         log.exception("TRANSFORM TEST END | run_id=%s | status=FAILED", batch.run_id)
+        if extract_output_path is None:
+            extract_output_path = write_stage_output(batch, "extract", batch.extraction_run_id, {
+                "stage": "extract",
+                "run_id": batch.extraction_run_id,
+                "batch_id": batch.batch_id,
+                "batch_date": batch.batch_date,
+                "status": "FAILED",
+                "error_message": str(exc),
+                "tables": {},
+            })
         write_metadata(failed_metadata(batch, handover_counts, started, ended, str(exc)), batch)
+        output_path = write_stage_output(batch, "transform", batch.run_id, {
+            "stage": "transform",
+            "run_id": batch.run_id,
+            "parent_run_id": batch.extraction_run_id,
+            "batch_id": batch.batch_id,
+            "status": "FAILED",
+            "decision": "REJECTED",
+            "error_message": str(exc),
+            "handover_counts": handover_counts,
+            "input_extract_output": extract_output_path,
+        })
         print(f"\nRESULT: REJECTED — the run failed ({exc}). See the log.")
+        print(f"JSON output: {output_path}")
         return "REJECTED"
 
     # ---- screen summary ----
@@ -103,6 +159,7 @@ def run_transform_test(target_date: str | None = None) -> str:
     print(f"\nQuarantine : {quarantine_path}  ({len(result.quarantine)} record(s))")
     print(f"Profile    : {profile_path}")
     print(f"Metadata   : {metadata_path}")
+    print(f"JSON output: {output_path}")
     print(f"\nDECISION: {result.decision}")
     return result.decision
 

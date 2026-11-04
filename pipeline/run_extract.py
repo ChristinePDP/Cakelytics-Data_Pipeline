@@ -31,6 +31,7 @@ from extract.extract_sales import extract_sales
 from extract.extract_expenses import extract_waste, extract_inventory_costs
 from utils.batch import make_batch
 from utils.logger import get_logger
+from utils.stage_output import dataframe_records, ensure_stage_directories, write_stage_output
 
 log = get_logger(__name__)
 
@@ -38,7 +39,7 @@ log = get_logger(__name__)
 # query is edited wrongly, this is where it shows up first.
 # "id" is the primary key of order_items, waste_logs and inventory_logs.
 EXPECTED_COLUMNS = {
-    "sales (order_items)": ["id", "order_id", "quantity", "total_price", "updated_at", "status"],
+    "order_items": ["id", "order_id", "quantity", "total_price", "updated_at", "status"],
     "waste_logs": [
         "id", "waste_type", "item_name", "quantity", "unit", "cost", "logged_at", "voided_at",
     ],
@@ -87,6 +88,7 @@ def run_extract_test(target_date: str | None = None) -> bool:
     check_source_env()
 
     batch = make_batch(target_date)
+    ensure_stage_directories(batch)
 
     log.info(
         "EXTRACT TEST START | run_id=%s | batch_id=%s | data_start=%s | data_end=%s",
@@ -94,20 +96,47 @@ def run_extract_test(target_date: str | None = None) -> bool:
         batch.window_start.isoformat(), batch.window_end.isoformat(),
     )
 
-    results = {
-        "sales (order_items)": extract_sales(batch.window_start, batch.window_end),
-        "waste_logs": extract_waste(batch.window_start, batch.window_end),
-        "inventory_logs": extract_inventory_costs(batch.window_start, batch.window_end),
-    }
+    try:
+        results = {
+            "order_items": extract_sales(batch.window_start, batch.window_end),
+            "waste_logs": extract_waste(batch.window_start, batch.window_end),
+            "inventory_logs": extract_inventory_costs(batch.window_start, batch.window_end),
+        }
+    except Exception as exc:
+        log.exception("EXTRACT TEST END | run_id=%s | status=FAILED", batch.extraction_run_id)
+        output_path = write_stage_output(batch, "extract", batch.extraction_run_id, {
+            "stage": "extract",
+            "run_id": batch.extraction_run_id,
+            "batch_id": batch.batch_id,
+            "status": "FAILED",
+            "error_message": str(exc),
+            "tables": {},
+        })
+        print(f"\nRESULT: EXTRACTION FAILED — {exc}")
+        print(f"JSON output: {output_path}")
+        return False
 
     passed = [_check(name, df) for name, df in results.items()]
 
     ok = all(passed)
+    output_path = write_stage_output(batch, "extract", batch.extraction_run_id, {
+        "stage": "extract",
+        "run_id": batch.extraction_run_id,
+        "batch_id": batch.batch_id,
+        "batch_date": batch.batch_date,
+        "window": [batch.window_start.isoformat(), batch.window_end.isoformat()],
+        "status": "SUCCESS" if ok else "FAILED",
+        "tables": {
+            name: {"records_read": len(df), "records": dataframe_records(df)}
+            for name, df in results.items()
+        },
+    })
     log.info(
         "EXTRACT TEST END | run_id=%s | status=%s",
         batch.extraction_run_id, "SUCCESS" if ok else "FAILED",
     )
     print("\nRESULT:", "ALL EXTRACTORS PASSED" if ok else "SOMETHING FAILED — check the log")
+    print(f"JSON output: {output_path}")
     return ok
 
 

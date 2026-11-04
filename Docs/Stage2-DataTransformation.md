@@ -409,7 +409,7 @@ Extraction and transformation records are maintained **separately**, establishin
 
 | Record Type | Retention Schedule | Technical Justification | Implementation Status |
 |---|---|---|---|
-| **Operational Logs** (`etl_<date>.log`) | Retain **90 Days** | Covers a full quarterly reporting and debugging cycle; old logs can be cleared after quarterly sign-off. | Retention is managed manually; automatic log rotation is not implemented in Phase 2. |
+| **Operational Logs** (`etl_<date>.log`) | Retain **90 Days** | Covers a full quarterly reporting and debugging cycle; old logs can be cleared after quarterly sign-off. | Implemented. Pruning is automated via `cleanup_old_logs(retention_days=90)` in `utils/logger.py`, executed on runner initialization. |
 | **Audit Run Records** (`transform_<run_id>.json`) | Retain **1 Year** | Provides permanent evidence of approved financial summaries and rule versions for annual financial audits. | Stored on disk; manual pruning after 1 year. |
 | **Quarantine Files** (`quarantine_<batch_id>.csv`) | Retain **180 Days** | Allows store management sufficient operational runway (6 months) to investigate, correct, and reconcile rejected transactions with operational staff. | Overwritten by `batch_id` upon rerun; manual cleanup after 180 days. |
 | **Profiling Reports** (`profile_<batch_id>.md`) | Retain **90 Days** | Tracks data quality trends and defect frequencies across developmental and operational sprints. | Stored per batch; manual deletion. |
@@ -417,7 +417,7 @@ Extraction and transformation records are maintained **separately**, establishin
 ### 9.4 Archiving and Deletion Governance
 - **Deletion Restrictions:** Operational logs, audit records, and quarantine files **must not be deleted** prior to the expiration of their defined retention periods, or while an active data investigation or recovery operation is open.
 - **Archiving Requirements:** When operational logs exceed 90 days but remain relevant to an active investigation, they are manually archived to offline cold storage. Automatic archiving is not implemented.
-- **Responsible Person:** File deletion is performed exclusively by the **ETL Developer** following quarterly operational reviews.
+- **Responsible Person:** Automated pruning is executed by `utils/logger.py` for expired logs (>90 days); manual deletion/review of audit and quarantine records is performed exclusively by the **ETL Developer** following quarterly operational reviews.
 
 ---
 

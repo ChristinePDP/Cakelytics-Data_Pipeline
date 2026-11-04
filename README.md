@@ -26,6 +26,7 @@ logs/         -> ETL run logs (generated, not committed)
 metadata/     -> transformation run metadata (generated, not committed)
 quarantine/   -> rejected and excluded records per batch (generated, not committed)
 reports/      -> data profiling report per batch (generated, not committed)
+outputs/      -> physical JSON output per batch and stage (extract/transform/load)
 ```
 
 ## 1. Requirements
@@ -99,9 +100,18 @@ Files written by a run:
 | `reports/profile_<batch_id>.md` | Data profiling report (issue table for the documentation) |
 | `metadata/transform_<run_id>.json` | Run metadata: run IDs, counts, rules applied, validation results, errors |
 | `logs/etl_<date>.log` | Log lines (also shown on screen) |
+| `outputs/<batch_id>/extract/extract_<run_id>.json` | The exact raw records returned by each extractor; this is the physical handoff into Transform |
+| `outputs/<batch_id>/transform/transform_<run_id>.json` | The cleaned records per table plus final output tables, decision, and failed/quarantined records; this is the physical handoff for Load |
+| `outputs/<batch_id>/load/` | Reserved for the future Load stage; no file is written yet |
 
 Reruns are idempotent: the quarantine file is overwritten by batch ID, so
 running the same day twice never creates duplicates.
+
+The JSON artifact marks a rejected record with `category: "REJECTED"` and
+counts it in `failed_records`. A rejected record does not automatically make
+the whole batch fail: the current acceptance policy makes the batch
+`MANUAL REVIEW` when the rejection rate is above 1%, and `REJECTED` when a
+critical validation check fails or the run itself errors.
 
 ## 7. The rules
 

@@ -16,6 +16,7 @@ from transform.reporting import (
 )
 from transform.transform_batch import transform_batch
 from utils.batch import Batch, PH_TZ
+from utils.stage_output import dataframe_records, ensure_stage_directories, write_stage_output
 
 
 def run_defect_test():
@@ -70,6 +71,7 @@ def run_defect_test():
     ])
 
     extracted = {"order_items": order_items, "waste_logs": waste, "inventory_logs": inventory}
+    ensure_stage_directories(batch)
     handover = {t: len(df) for t, df in extracted.items()}
     res = transform_batch(extracted, batch, handover)
 
@@ -78,6 +80,22 @@ def run_defect_test():
         profile_to_markdown(batch, res.profile, res.distributions, handover), batch
     )
     metadata_path = write_metadata(build_metadata(res, handover), batch)
+    output_path = write_stage_output(batch, "transform", batch.run_id, {
+        "stage": "transform",
+        "run_id": batch.run_id,
+        "parent_run_id": batch.extraction_run_id,
+        "batch_id": batch.batch_id,
+        "status": "SUCCESS" if res.decision == "APPROVED" else res.decision.replace(" ", "_"),
+        "decision": res.decision,
+        "handover_counts": handover,
+        "failed_records": int(res.quarantine["category"].eq("REJECTED").sum()),
+        "quarantine": dataframe_records(res.quarantine),
+        "transformed_records": {
+            name: dataframe_records(table.output_df)
+            for name, table in res.tables.items()
+        },
+        "outputs": {name: dataframe_records(df) for name, df in res.outputs.items()},
+    })
 
     print(f"\nTRANSFORM TEST for {batch.batch_date}  ({batch.batch_id})")
     print(f"Extraction run: {batch.extraction_run_id}   Transformation run: {batch.run_id}\n")
@@ -97,6 +115,7 @@ def run_defect_test():
     print(f"\nQuarantine : {quarantine_path}  ({len(res.quarantine)} record(s))")
     print(f"Profile    : {profile_path}")
     print(f"Metadata   : {metadata_path}")
+    print(f"JSON output: {output_path}")
     print(f"\nDECISION: {res.decision}")
 
     return res
