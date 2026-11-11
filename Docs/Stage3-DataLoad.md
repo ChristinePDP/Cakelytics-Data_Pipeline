@@ -305,3 +305,357 @@ This approach ensures that the dimension and fact records are handled as one log
 Operational failure metadata should be written after the transaction rollback or through a separate logging mechanism so that the failure record is not lost when the data transaction is rolled back.
 
 ---
+
+### 3.6 Rerun and Idempotency
+
+The load process must be idempotent. Reprocessing the same approved business batch must not create duplicate dimension or fact records.
+
+| Mechanism | Implementation Rule |
+| :--- | :--- |
+| **Dimension Matching** | Use `date_key` to identify existing date records. |
+| **Fact Matching** | Use `date_key` as the unique business-date match key. |
+| **Existing Fact Record** | Update the existing daily summary instead of inserting another record. |
+| **Batch Identification** | Use `batch_id` to trace the batch responsible for the load. |
+| **Transformation Lineage** | Use `transformation_run_id` to identify the Stage 2 execution. |
+| **Transaction Control** | Use commit and rollback to prevent partial data writes. |
+
+When a batch is rerun, Stage 3 must use the newly approved Stage 2 handover. The loader must not simply duplicate the previous records.
+
+---
+
+## 4. Pre-Load Validation Checks
+
+Pre-load validation checks are performed before writing any records to the warehouse. These checks confirm that the target database is accessible and that the incoming Stage 2 handover is complete and valid.
+
+| Check ID | Check Name | Target | Purpose | Validation Criteria | Severity |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **P-01** | Target Database Connection | Warehouse Database | Confirm that the target database is available. | PostgreSQL connection is established within the configured connection timeout. | Critical |
+| **P-02** | Write Permission Check | Warehouse Database | Ensure that the ETL service account can write to the target tables. | The configured service account has the required privileges on `warehouse.dim_date` and `warehouse.fact_daily_summary`. | Critical |
+| **P-03** | Schema Contract Match | `dim_date`, `fact_daily_summary` | Prevent column and data type mismatches. | All required target columns exist and their data types are compatible with the documented Stage 2 handover. | Critical |
+| **P-04** | Handover Status | Stage 2 Metadata | Ensure that only accepted transformation outputs are loaded. | Stage 2 decision is `APPROVED`, or a `MANUAL REVIEW` batch has documented authorization. | Critical |
+| **P-05** | Handover Completeness | Stage 2 DataFrames | Confirm that the expected transformed data is available. | Both DataFrames contain the required columns; one date record and one daily fact record are present for the expected daily batch. | Critical |
+| **P-06** | Handover Metadata Check | Stage 2 Metadata | Confirm batch traceability. | `run_id`, `parent_run_id`, `batch_id`, and `batch_window` are present and valid. | Critical |
+| **P-07** | Date and Key Consistency | Both DataFrames | Ensure that the fact record references the correct date. | `dim_date.date_key` equals `fact_daily_summary.date_key`, and their `full_date` values match. | Critical |
+| **P-08** | Financial Value Check | `fact_daily_summary` | Ensure that financial values are suitable for the target schema. | `total_sales` and `total_expenses` are non-negative; financial values can be represented with two decimal places; `profit` matches the value supplied by Stage 2. | Critical |
+| **P-09** | Duplicate Batch Check | Warehouse Audit Records | Prevent unintended duplicate processing. | A previously successful batch is identified. If it is a rerun, the loader must use the approved upsert process rather than duplicate insertion. | Critical |
+| **P-10** | Storage Availability | Warehouse Database | Ensure that sufficient storage is available. | The target database can accept the expected batch writes. | Non-critical / Critical (depending on availability) |
+
+> **Pre-Load Validation Rule:**  
+> If any critical pre-load check fails, the loader must stop before writing data to the target tables. The error must be recorded in the load metadata or operational logs. No new cleaning or business calculations are performed to make an invalid handover pass these checks.
+
+---
+
+## 5. Post-Load Validation and Reconciliation
+
+Post-load validation checks are performed immediately after the database write operations and before the transaction is committed. Their purpose is to confirm that the records in the warehouse match the transformed data received from Stage 2.
+
+### 5.1 Post-Load Validation Catalog
+
+| Check ID | Check Name | Target | Purpose | Validation Criteria | Severity |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **L-01** | Record Reconciliation | Both Target Tables | Confirm that every received record has an accounted-for load outcome. | For each table: $\text{records\_received} = \text{records\_inserted} + \text{records\_updated} + \text{records\_unchanged} + \text{records\_rejected}$. | Critical |
+| **L-02** | Target Row Count | `dim_date`, `fact_daily_summary` | Confirm that the expected records exist after loading. | One matching date record exists in `dim_date` and one matching fact record exists in `fact_daily_summary` for the target business date. | Critical |
+| **L-03** | Primary Key Uniqueness | Both Target Tables | Prevent duplicate primary keys. | Duplicate `date_key` values in `dim_date` and duplicate `summary_key` values in `fact_daily_summary` equal zero. | Critical |
+| **L-04** | Date Uniqueness | `dim_date`, `fact_daily_summary` | Maintain one record per business date. | `full_date` is unique in `dim_date`; `date_key` is unique in `fact_daily_summary`. | Critical |
+| **L-05** | Referential Integrity | `fact_daily_summary.date_key` | Prevent orphan fact records. | Every fact record has a matching `dim_date.date_key`. | Critical |
+| **L-06** | Required Column Check | Both Target Tables | Ensure that required warehouse fields are populated. | All columns defined as `NOT NULL` contain no `NULL` values. | Critical |
+| **L-07** | Data Type and Format Check | Both Target Tables | Ensure that loaded data follows the target schema. | Date keys are integers, dates are valid `DATE` values, and financial measures are `NUMERIC(10,2)`. | Critical |
+| **L-08** | Amount Reconciliation | `fact_daily_summary` | Confirm that financial amounts were not changed or lost during loading. | Warehouse `total_sales`, `total_expenses`, and `profit` match the corresponding Stage 2 handover values. | Critical |
+| **L-09** | Batch Lineage Check | `fact_daily_summary` | Confirm that the loaded record is linked to the correct batch. | `batch_id` and `transformation_run_id` match the Stage 2 metadata supplied to the loader. | Critical |
+| **L-10** | Load Error Check | Warehouse Load Execution | Detect database errors or interrupted writes. | No unresolved database errors, constraint violations, or incomplete write operations remain. | Critical |
+
+---
+
+### 5.2 Record Reconciliation
+
+The load process must account for all records received from Stage 2.
+
+$$\text{Records Received} = \text{Records Inserted} + \text{Records Updated} + \text{Records Unchanged} + \text{Records Rejected}$$
+
+Where:
+- **Records Received:** Total rows received from the Stage 2 DataFrames.
+- **Records Inserted:** New records successfully added to the warehouse.
+- **Records Updated:** Existing records successfully updated during an upsert.
+- **Records Unchanged:** Existing dimension records reused without modification.
+- **Records Rejected:** Records that could not be loaded because of database or target constraint violations.
+
+The records already rejected or excluded during Stage 2 are not counted as Stage 3 load rejections. They are accounted for in the Transformation stage's own reconciliation and quarantine records.
+
+---
+
+### 5.3 Financial Reconciliation
+
+The financial values stored in the warehouse must match the corresponding values handed over by Stage 2.
+
+| Measure | Stage 2 Handover | Warehouse Target | Validation |
+| :--- | :--- | :--- | :--- |
+| `total_sales` | `fact_daily_summary.total_sales` | `fact_daily_summary.total_sales` | Exact monetary match. |
+| `total_expenses` | `fact_daily_summary.total_expenses` | `fact_daily_summary.total_expenses` | Exact monetary match. |
+| `profit` | `fact_daily_summary.profit` | `fact_daily_summary.profit` | Exact monetary match. |
+
+The Load stage must not recalculate these measures. It only verifies that the stored values match the supplied Stage 2 values.
+
+---
+
+### 5.4 Handling Validation Failures
+
+| Validation Result | Action |
+| :--- | :--- |
+| **All critical checks PASS** | Continue to transaction commit. |
+| **A critical check FAILS** | Roll back the entire batch transaction and record the failure. |
+| **A non-critical warning occurs** | Record the warning and follow the manual review procedure. |
+| **Database constraint violation occurs** | Reject the load operation, roll back the transaction, and report the affected record or constraint. |
+
+---
+
+## 6. Load Metadata and Log Specification
+
+Every load execution should produce structured metadata and operational logs to support monitoring, troubleshooting, auditing, data lineage, and recovery.
+
+The proposed design uses local JSON metadata and operational logs. A warehouse `load_log` table may also be implemented to support centralized load monitoring.
+
+### 6.1 Load Metadata Fields
+
+| Field Name | Purpose | Example Value / Format |
+| :--- | :--- | :--- |
+| `load_run_id` | Unique identifier for the Load stage execution. | `LOD_20261023_100600` |
+| `transformation_run_id` | Identifies the Stage 2 execution that produced the loaded data. | `TRN_20261023_100546` |
+| `extraction_run_id` | Identifies the original Stage 1 extraction execution, obtained from Stage 2 `parent_run_id`. | `EXT_20261023_100546` |
+| `batch_id` | Identifies the business batch being loaded. | `BATCH_20261019` |
+| `batch_window` | Date range covered by the batch in Asia/Manila time. | `2026-10-19T00:00:00+08:00` to `2026-10-19T23:59:59.999999+08:00` |
+| `table_name` | Identifies the warehouse table being loaded. | `fact_daily_summary` |
+| `load_type` | Identifies the loading strategy. | `INCREMENTAL_UPSERT` |
+| `load_start_ts` | Records when the load begins. | `2026-10-23T10:06:00+08:00` |
+| `load_end_ts` | Records when the load finishes. | `2026-10-23T10:06:00+08:00` |
+| `load_duration_sec` | Total time required to complete the load. | `0.450` |
+| `records_received` | Number of records received from Stage 2. | `1` |
+| `records_inserted` | Number of new records inserted. | `1` |
+| `records_updated` | Number of existing records updated. | `0` |
+| `records_unchanged` | Number of existing records reused without changes. | `0` |
+| `records_rejected` | Number of records that failed to load. | `0` |
+| `pre_load_result` | Overall result of pre-load validation. | `PASS` |
+| `post_load_result` | Overall result of post-load validation. | `PASS` |
+| `status` | Overall result of the load execution. | `SUCCESS` |
+| `error_code` | Error information when a load operation fails. | `NULL` |
+| `load_code_version` | Version of the implemented load code. | `v1.0.0` (illustrative) |
+
+> *The `load_code_version` example is illustrative only. The actual version must be assigned when the loader is implemented.*
+
+---
+
+### 6.2 Storage Locations
+
+| Record Type | Proposed Storage Location | Content |
+| :--- | :--- | :--- |
+| **Operational Load Logs** | `logs/load_<date>.log` | Execution details, database errors, validation messages, and load status. |
+| **Load Audit Metadata** | `metadata/load_<run_id>.json` | Batch details, run identifiers, record counts, validation results, and execution status. |
+| **Warehouse Load Records** | `warehouse.load_log` (proposed) | Centralized record of load executions and batch results. |
+| **Rejected Load Records** | `quarantine/load_rejects_<batch_id>.csv` | Records rejected by target database constraints, together with the rejection reason. |
+
+> *The local JSON metadata and log files are proposed outputs of the Load stage. Their actual creation and storage must be verified after implementation.*
+
+---
+
+### 6.3 Metadata and Log Usage
+
+| Use Case | Description |
+| :--- | :--- |
+| **Monitoring** | Load status, execution duration, and validation results help determine whether the daily batch completed successfully. |
+| **Troubleshooting** | Error messages, database responses, and rejection details help identify the cause of a failed load. |
+| **Auditing** | Run IDs, batch IDs, record counts, and timestamps provide evidence of warehouse loading activities. |
+| **Data Lineage** | `transformation_run_id` links the warehouse records to Stage 2, while `extraction_run_id` provides traceability back to Stage 1. |
+| **Recovery** | Batch identifiers and load status help identify which business date needs to be reprocessed. |
+
+The metadata should preserve the connection between the original extraction, the transformation execution, and the final warehouse load.
+
+---
+
+## 7. Log Retention, Rejected Data, and Access
+
+This section defines how operational logs, audit metadata, and records rejected during loading should be stored, protected, retained, and deleted.
+
+The retention periods below are proposed policies for the Load stage and must be aligned with the project's actual storage and maintenance arrangements.
+
+### 7.1 Retention Schedule and Storage Locations
+
+| Record Type | Storage Location | Proposed Retention Period | Purpose |
+| :--- | :--- | :--- | :--- |
+| **Operational Load Logs** | `logs/load_<date>.log` | 90 days | Supports daily monitoring and technical troubleshooting. |
+| **Load Audit Metadata** | `metadata/load_<run_id>.json` | 1 year | Preserves batch execution details and data lineage for auditing. |
+| **Warehouse Load Records** | `warehouse.load_log` | 1 year | Maintains centralized records of successful and failed load executions. |
+| **Rejected Load Records** | `quarantine/load_rejects_<batch_id>.csv` | 180 days | Allows investigation and recovery of records that could not be loaded. |
+
+---
+
+### 7.2 Access Permissions
+
+| Record Category | Read Permission | Write Permission | Delete Permission |
+| :--- | :--- | :--- | :--- |
+| **Operational Logs** | ETL Developer / Authorized Maintainer | ETL Loader Process | Authorized ETL Maintainer |
+| **Load Audit Metadata** | ETL Developer / Authorized Maintainer | ETL Loader Process | Authorized ETL Maintainer |
+| **Warehouse Load Records** | Authorized Developers and Store Analysts | ETL Service Account | Database Administrator / Authorized Maintainer |
+| **Rejected Load Records** | ETL Developer / Authorized Maintainer | ETL Loader Process | Authorized ETL Maintainer |
+
+Access to the warehouse should follow the principle of least privilege. Store users and dashboard consumers should only receive the permissions necessary to access reporting data. They should not be allowed to modify ETL audit records or rejected data.
+
+---
+
+### 7.3 Security and Credential Management
+
+- Database credentials must be stored in environment variables or an appropriately secured secrets manager.
+- Passwords, API keys, and connection strings must not be written to logs or audit metadata.
+- The ETL service account should have only the privileges needed to load the designated warehouse tables.
+- Operational logs and quarantine files must not be exposed through public application endpoints.
+- Access to rejected records must be restricted to authorized personnel because the records may contain sensitive operational or financial information.
+
+---
+
+### 7.4 Archiving and Deletion Governance
+
+| Policy | Description |
+| :--- | :--- |
+| **Retention Compliance** | Logs and rejected records must not be deleted before their assigned retention periods expire. |
+| **Investigation Hold** | Records must be retained beyond their normal expiration date if they are still needed for troubleshooting, auditing, or recovery. |
+| **Archiving** | Audit metadata and warehouse logs older than 1 year may be archived to secondary storage if required for long-term historical analysis. |
+| **Deletion Authority** | Only the authorized ETL maintainer or database administrator may approve deletion of retained records. |
+| **Backup and Recovery** | The warehouse should follow the backup and recovery facilities available in its PostgreSQL hosting environment. A backup or snapshot should be considered before major schema changes or high-risk maintenance operations. |
+
+> **Implementation Status:** The retention periods, access permissions, archival process, and deletion procedures are proposed governance policies. Their actual automation and enforcement have not been verified in the provided Stage 1 and Stage 2 documentation.
+
+---
+
+## 8. Load Acceptance, Rollback, and Completion Rules
+
+This section defines when a batch is considered successfully loaded, when manual review is necessary, and when the loading process must be rejected or rolled back.
+
+### 8.1 Decision Rules
+
+| Overall Condition | Acceptance Decision | Pipeline Action | Decision Type | Responsible Role |
+| :--- | :--- | :--- | :--- | :--- |
+| All critical pre-load and post-load checks PASS, record reconciliation matches, and the transaction commits successfully. | **APPROVED** | Mark the batch as successfully loaded and make the data available for reporting. | Automatic | ETL Pipeline |
+| One or more non-critical warnings occur, but no critical validation check fails. | **MANUAL REVIEW** | Hold publication or downstream notification until an authorized developer reviews the batch. | Manual | ETL Developer / ETL Maintainer |
+| A critical validation check fails, the handover is invalid, or a database error prevents a complete load. | **REJECTED** | Roll back the transaction, record the error, and stop the batch. | Automatic | ETL Pipeline / ETL Developer |
+
+---
+
+### 8.2 Automatic Approval
+
+A batch may be marked **APPROVED** when all of the following conditions are satisfied:
+1. The Stage 2 handover is `APPROVED`.
+2. All required input DataFrames and metadata are present.
+3. The target database connection and write permissions are valid.
+4. The target table structures match the expected data contract.
+5. The dimension and fact records are loaded successfully.
+6. All critical post-load validation checks pass.
+7. Record reconciliation and financial reconciliation match.
+8. The database transaction commits successfully.
+
+Once these conditions are satisfied, the batch is considered successfully loaded.
+
+---
+
+### 8.3 Manual Review
+
+A batch is marked **MANUAL REVIEW** when a non-critical warning requires additional inspection but no critical data integrity rule has failed.
+
+Examples include:
+- An unusual load duration.
+- A warning related to database performance.
+- A non-critical operational warning that does not affect the correctness of the loaded financial summary.
+
+The ETL Developer or authorized maintainer must inspect the load logs and metadata before approving further processing. A Stage 2 batch marked `MANUAL REVIEW` must also receive documented authorization before Stage 3 begins loading it.
+
+---
+
+### 8.4 Rejection and Failure Handling
+
+A batch must be marked **REJECTED** when:
+- The Stage 2 handover is invalid or has not been approved.
+- Required DataFrame columns are missing.
+- The target database is unavailable.
+- A required table or column does not match the documented target schema.
+- A foreign key or other critical database constraint fails.
+- Post-load record or financial reconciliation does not match.
+- A database interruption prevents the batch from completing successfully.
+
+#### Proposed Retry Policy:
+- **Automatic Retry Attempts:** Up to 2 additional attempts after the initial failure.
+- **Retry Interval:** 30 seconds between attempts.
+- **Retry Conditions:** Temporary connection failures or recoverable database availability issues.
+- **No-Retry Conditions:** Invalid handover schema, failed critical data validation, or unresolved constraint violations.
+- **Final Failure Action:** Roll back the transaction, record the error, stop the batch, and notify the ETL Developer.
+
+> *The retry policy is proposed and must not be treated as an implemented feature until the loader is developed and tested.*
+
+---
+
+### 8.5 Rollback Procedure
+
+If a critical load operation fails, the proposed rollback procedure is:
+1. Stop the current loading operation.
+2. Execute `ROLLBACK` on the active database transaction.
+3. Confirm that no partial records from the failed transaction remain.
+4. Record the failure status, error message, batch ID, and transformation run ID.
+5. Notify the responsible ETL Developer or maintainer.
+6. Correct the underlying issue and rerun the approved batch when appropriate.
+
+The rollback operation must cover both `dim_date` and `fact_daily_summary` writes so that the batch remains consistent.
+
+---
+
+### 8.6 Completion and Handover
+
+After a successful commit, the Load stage should produce a completion record containing:
+- Load run ID.
+- Transformation run ID.
+- Extraction run ID.
+- Batch ID and batch window.
+- Tables loaded.
+- Number of records inserted, updated, unchanged, and rejected.
+- Pre-load and post-load validation results.
+- Overall load status.
+- Load start and end timestamps.
+- Load duration.
+
+The loaded `dim_date` and `fact_daily_summary` tables become available to authorized reporting and dashboard processes after successful completion.
+
+Downstream reporting systems may be notified through the pipeline orchestration mechanism once the batch has been successfully committed.
+
+> **Implementation Note:** Automatic notification and downstream orchestration are proposed integration features. Their implementation depends on the later orchestration and warehouse integration phase.
+
+---
+
+## 9. Common Load Problems and Mitigation
+
+The following problems are relevant to the proposed PostgreSQL warehouse and the daily batch-loading design.
+
+| # | Problem Description | Possible Cause | Impact on the Load Process | Proposed Solution / Mitigation |
+| :--- | :--- | :--- | :--- | :--- |
+| **1** | **Duplicate daily summary after rerun** | The same business date is inserted again without checking whether a fact record already exists. | Duplicate daily summaries may cause inaccurate dashboard totals. | Enforce a `UNIQUE` constraint on `fact_daily_summary.date_key` and use an upsert operation to update existing records. |
+| **2** | **Foreign Key Constraint Violation** | The fact record is loaded before its corresponding date dimension record exists. | The database rejects the fact record, causing the batch to fail. | Load `dim_date` before `fact_daily_summary` and validate the referenced `date_key` before committing. |
+| **3** | **Partial Load After Connection Loss** | The database connection is interrupted while writing the batch. | The dimension may be loaded without its corresponding fact record if transaction control is not used. | Execute both table operations within one transaction and roll back the transaction if any critical operation fails. |
+| **4** | **Schema or Data Type Mismatch** | The warehouse table structure differs from the documented Stage 2 output contract. | The loader may reject incoming records or store incorrect data types. | Perform pre-load schema validation and reject incompatible handovers before writing to the warehouse. |
+| **5** | **Target Database Unavailable** | Network interruption, database maintenance, or Supabase service unavailability. | The batch cannot be loaded, delaying dashboard updates. | Check database connectivity before loading, record the failure, and retry recoverable connection errors according to the configured retry policy. |
+| **6** | **Insufficient Database Write Permission** | The ETL service account lacks the required `INSERT` or `UPDATE` privileges. | The loader cannot write to the target tables. | Assign a dedicated ETL service account with restricted but sufficient permissions on the warehouse tables. |
+| **7** | **Incorrect Financial Values After Loading** | Values are altered during type conversion or the loader recalculates measures instead of using the Stage 2 output. | Daily sales, expenses, and profit may differ from the approved transformation results. | Preserve the original Stage 2 financial values, use appropriate `NUMERIC` data types, and perform exact amount reconciliation before committing. |
+| **8** | **Duplicate or Conflicting Batch Execution** | Two load processes attempt to write the same business date at the same time. | Conflicting updates, transaction failures, or inconsistent audit records may occur. | Use a batch-level execution lock or equivalent coordination mechanism and enforce the unique `date_key` constraint. |
+| **9** | **Warehouse Storage or Query Timeout** | Database resource limits or concurrent reporting queries affect the load operation. | Loading may become delayed or fail before completion. | Monitor database availability and resource usage, configure reasonable connection and statement timeouts, and schedule the batch during the intended off-peak period. |
+| **10** | **Missing Load Audit Information** | The load process writes data but fails to record the associated batch and transformation identifiers. | The loaded record becomes difficult to trace or recover. | Require `batch_id` and `transformation_run_id` as load metadata, and record the execution outcome in the load audit metadata. |
+
+---
+
+## Expected Output
+
+Upon successful execution, Stage 3 stores the transformed daily business summaries received from Stage 2 in the proposed PostgreSQL analytics warehouse.
+
+The expected warehouse outputs are:
+1. **`dim_date`** – Contains one date dimension record for the target business day.
+2. **`fact_daily_summary`** – Contains one daily summary record with the total sales, total expenses, and profit supplied by Stage 2.
+3. **Load Metadata** – Records the load run ID, linked transformation and extraction run IDs, batch information, record counts, validation results, and execution status.
+4. **Operational Logs** – Provide details of the loading process, database operations, and errors.
+5. **Rejected Load Records** – Preserve records that fail during the warehouse loading process, when applicable.
+
+The loaded data becomes available for authorized dashboards, reports, and business analysis after successful validation and transaction commit.
+
+The Load stage does not perform additional extraction, data cleaning, or financial calculations. All business transformations remain under the responsibility of Stage 2.
+
