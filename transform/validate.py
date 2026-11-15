@@ -65,6 +65,9 @@ CHECK_CATALOG = {
     "V-11": ("Rejection rate within threshold", "Each input table",
              "Detect unusually poor data quality",
              f"records_rejected / records_read <= {REJECTION_THRESHOLD:.0%}", NON_CRITICAL),
+    "V-12": ("Recognized order status", "order_items.status",
+             "Prevent unknown order states from reaching business totals",
+             "Every retained order has status Completed or Cancelled", CRITICAL),
 }
 
 
@@ -180,6 +183,16 @@ def run_checks(
         if rate > REJECTION_THRESHOLD:
             over.append(t)
     results.append(_result("V-11", not over, "rejection rate -> " + "; ".join(rates)))
+
+    # V-12 recognized order status
+    statuses = tables["order_items"].output_df["status"].astype("string").str.casefold()
+    invalid_statuses = sorted(set(statuses.dropna()) - {"completed", "cancelled"})
+    results.append(_result(
+        "V-12",
+        not invalid_statuses,
+        "unknown status values: " + ", ".join(invalid_statuses)
+        if invalid_statuses else "all retained orders have recognized statuses",
+    ))
 
     return results
 

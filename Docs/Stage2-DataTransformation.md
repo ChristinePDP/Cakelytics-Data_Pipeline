@@ -44,7 +44,7 @@ The source database schema and extraction queries are specified in the **Stage 1
 |---|---|
 | **Pure Transformation** | Output tables are pure deterministic functions of the input DataFrames. No state is persisted across runs. |
 | **Overwrite by Batch ID** | The quarantine file is named `quarantine_<batch_id>.csv` and is completely overwritten per batch run. A clean rerun with zero defects replaces an earlier file containing rejects. |
-| **Unique Run Metadata** | Every production run writes a unique timestamped file (`transform_<run_id>.json`), preserving historical audit records (standalone test suites such as `run_defect_test` use a fixed test label for predictable test output). |
+| **Unique Run Metadata** | Every production run writes a unique timestamped file (`transform_<run_id>.json`), preserving historical audit records. |
 | **Warehouse Deduplication** | In the subsequent Load stage, the warehouse enforces uniqueness on `date_key`, replacing existing records upon rerun. |
 
 ### 1.3 Transformation Scope
@@ -499,58 +499,6 @@ DECISION: APPROVED
 | BATCH_20261019 | inventory_logs | `cf444eae-aeec-46ab-a906-e5809b83cec3` | B-03 | EXCLUDED | Voided inventory log is not an expense | 123.00 |
 | BATCH_20261019 | inventory_logs | `f3a8cd6d-1b1d-433b-a926-f88f62980171` | B-03 | EXCLUDED | Voided inventory log is not an expense | 1.00 |
 
-#### Defect Test Execution Evidence (`BATCH_20261020_DEFECT_TEST`)
-Execution output from `python -m pipeline.run_defect_test` verifying data cleaning rejection rules (C-01 to C-06, S-02, S-03):
-
-```
-TRANSFORM TEST for 2026-10-20  (BATCH_20261020_DEFECT_TEST)
-Extraction run: EXT_20261020_DEFECT_TEST   Transformation run: TRN_20261020_DEFECT_TEST
-
-table             read  output  rejected  excluded
-order_items          8       1         6         1
-waste_logs           3       2         0         1
-inventory_logs       5       2         2         1
-
-Totals: total_sales=200.00  total_expenses=1015.00  profit=-815.00  (items sold: 2)
-
-Validation checks
-  V-01  PASS     Record reconciliation (Critical)
-  V-02  PASS     Extraction count reference (Critical)
-  V-03  PASS     Key uniqueness of retained records (Critical)
-  V-04  PASS     Output key uniqueness (Critical)
-  V-05  PASS     Required columns not null (Critical)
-  V-06  PASS     Referential integrity (Critical)
-  V-07  PASS     Data type and format conformance (Critical)
-  V-08  PASS     Business rule check (Critical)
-  V-09  PASS     Aggregate reconciliation (Critical)
-  V-10  WARNING  Join cardinality (row multiplication) (Non-critical): 1 duplicate order_items id(s) found after the join
-  V-11  WARNING  Rejection rate within threshold (Non-critical): rejection rate -> order_items: 75.00%; waste_logs: 0.00%; inventory_logs: 40.00%
-
-Quarantine : quarantine/quarantine_BATCH_20261020_DEFECT_TEST.csv  (11 record(s))
-Profile    : reports/profile_BATCH_20261020_DEFECT_TEST.md
-Metadata   : metadata/transform_TRN_20261020_DEFECT_TEST.json
-
-DECISION: MANUAL REVIEW
-```
-
-**Quarantine Manifest for Defect Batch:**
-
-| batch_id | table_name | record_id | rule_id | category | reason | amount |
-|---|---|---|---|---|---|---|
-| BATCH_20261020_DEFECT_TEST | order_items | | C-01 | REJECTED | Missing primary key | 100.00 |
-| BATCH_20261020_DEFECT_TEST | order_items | `11111111-1111-1111-1111-111111111111` | C-02 | REJECTED | Duplicate id (first occurrence kept) | 200.00 |
-| BATCH_20261020_DEFECT_TEST | order_items | `66666666-6666-6666-6666-666666666666` | B-01 | EXCLUDED | Cancelled order is not revenue | 180.00 |
-| BATCH_20261020_DEFECT_TEST | order_items | `22222222-2222-2222-2222-222222222222` | C-03 | REJECTED | Missing total_price | |
-| BATCH_20261020_DEFECT_TEST | order_items | `33333333-3333-3333-3333-333333333333` | C-04 | REJECTED | Negative total_price | -50.00 |
-| BATCH_20261020_DEFECT_TEST | order_items | `44444444-4444-4444-4444-444444444444` | C-05 | REJECTED | Invalid quantity | 150.00 |
-| BATCH_20261020_DEFECT_TEST | order_items | `55555555-5555-5555-5555-555555555555` | C-06 | REJECTED | Orphan record: no parent order | 120.00 |
-| BATCH_20261020_DEFECT_TEST | waste_logs | `w3` | B-02 | EXCLUDED | Voided waste log is not an expense | 85.00 |
-| BATCH_20261020_DEFECT_TEST | inventory_logs | `i4` | B-03 | EXCLUDED | Voided inventory log is not an expense | 200.00 |
-| BATCH_20261020_DEFECT_TEST | inventory_logs | `i3` | S-02 | REJECTED | Outside the batch window | 120.00 |
-| BATCH_20261020_DEFECT_TEST | inventory_logs | `i5` | S-03 | REJECTED | Cannot convert to the target data type | INVALID_NUM |
-
----
-
 ## 11. Common Transformation Problems and Mitigation
 
 | # | Problem Scenario | Root Cause | Impact | Engineering Mitigation |
@@ -580,4 +528,4 @@ The transformation delivers in-memory DataFrames for `dim_date` and `fact_daily_
 | Section 6 (Data Contract) | `transform/compute_profit.py` |
 | Section 7 (Validation Suite) | `transform/validate.py` |
 | Section 8 (Metadata Logging) | `transform/reporting.py` |
-| Section 10 (Acceptance Gates) | `transform/validate.py` (`decide`), `pipeline/run_transform.py` (exit codes), `pipeline/run_defect_test.py` |
+| Section 10 (Acceptance Gates) | `transform/validate.py` (`decide`), `pipeline/run_transform.py` (exit codes) |
