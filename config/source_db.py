@@ -4,9 +4,11 @@ import os
 os.environ['DISABLE_SQLALCHEMY_CEXT'] = '1'
 from sqlalchemy import create_engine
 from sqlalchemy.engine import make_url
+from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+ROOT = Path(__file__).resolve().parent.parent
+load_dotenv(ROOT / ".env")
 
 # Reused across the whole process instead of creating a new engine (and a
 # new pool of open connections) every time get_source_engine() is called.

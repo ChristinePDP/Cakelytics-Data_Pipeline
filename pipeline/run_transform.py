@@ -92,6 +92,9 @@ def run_transform_test(target_date: str | None = None) -> str:
             profile_to_markdown(batch, result.profile, result.distributions, handover_counts), batch
         )
         metadata_path = write_metadata(build_metadata(result, handover_counts), batch)
+        failed_records = result.quarantine[
+            result.quarantine["category"].eq("REJECTED")
+        ].copy()
         output_path = write_stage_output(batch, "transform", batch.run_id, {
             "stage": "transform",
             "run_id": batch.run_id,
@@ -100,7 +103,8 @@ def run_transform_test(target_date: str | None = None) -> str:
             "status": "SUCCESS" if result.decision == "APPROVED" else result.decision.replace(" ", "_"),
             "decision": result.decision,
             "handover_counts": handover_counts,
-            "failed_records": int(result.quarantine["category"].eq("REJECTED").sum()),
+            "failed_record_count": len(failed_records),
+            "failed_records": dataframe_records(failed_records),
             "quarantine": dataframe_records(result.quarantine),
             "input_extract_output": extract_output_path,
             "transformed_records": {
@@ -160,6 +164,17 @@ def run_transform_test(target_date: str | None = None) -> str:
     print(f"Profile    : {profile_path}")
     print(f"Metadata   : {metadata_path}")
     print(f"JSON output: {output_path}")
+    failed_records = result.quarantine[result.quarantine["category"].eq("REJECTED")]
+    print(f"\nFAILED RECORDS: {len(failed_records)}")
+    if failed_records.empty:
+        print("  None")
+    else:
+        for record in failed_records.itertuples(index=False):
+            print(
+                f"  table={record.table_name} | record_id={record.record_id} | "
+                f"rule={record.rule_id} | reason={record.reason}"
+            )
+
     print(f"\nDECISION: {result.decision}")
     return result.decision
 
